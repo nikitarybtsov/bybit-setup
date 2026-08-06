@@ -60,12 +60,26 @@ function Have ($name) {
     try { return [bool](Get-Command $name -ErrorAction Stop) } catch { return $false }
 }
 
+# PowerShell 5.1 заворачивает stderr перенаправленной нативной программы в
+# объекты ошибок, и при $ErrorActionPreference='Stop' обычная неудачная проверка
+# (например «py -3.13» на машине без 3.13) становится фатальной. Пробы окружения
+# запускаем через этот помощник: их провал — нормальный ответ, а не сбой.
+function Invoke-Quiet {
+    param([scriptblock] $Script)
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & $Script } catch { } finally { $ErrorActionPreference = $prev }
+}
+
 function Winget-Install ($id, $label) {
     if (-not (Have 'winget')) {
         Die "На этом компьютере нет winget (магазин приложений Windows), поэтому $label автоматически не ставится. Сообщи руководителю."
     }
     Say "    ставлю $label, это может занять несколько минут..."
-    & winget install --id $id --silent --accept-source-agreements --accept-package-agreements --disable-interactivity 2>&1 | Out-Null
+    Invoke-Quiet {
+        & winget install --id $id --silent --accept-source-agreements `
+            --accept-package-agreements --disable-interactivity 2>&1 | Out-Null
+    }
     Update-PathFromRegistry
 }
 
@@ -83,8 +97,9 @@ function Find-Python {
     }
     if (Have 'py') {
         foreach ($v in @('3.13', '3.12', '3.11')) {
-            $p = & py "-$v" -c "import sys; print(sys.executable)" 2>$null
-            if ($LASTEXITCODE -eq 0 -and $p) { $candidates = @($p) + $candidates }
+            # Отсутствие версии — обычный ответ launcher'а, не ошибка установки.
+            $p = Invoke-Quiet { & py "-$v" -c "import sys; print(sys.executable)" 2>$null }
+            if ($p) { $candidates = @($p) + $candidates }
         }
     }
     if (Have 'python') {
@@ -93,8 +108,10 @@ function Find-Python {
     }
     foreach ($c in $candidates) {
         if (-not (Test-Path $c)) { continue }
-        $v = & $c -c "import sys; print('%d.%d' % sys.version_info[:2]); print(sys.maxsize > 2**32)" 2>$null
-        if ($LASTEXITCODE -ne 0 -or -not $v) { continue }
+        $v = Invoke-Quiet {
+            & $c -c "import sys; print('%d.%d' % sys.version_info[:2]); print(sys.maxsize > 2**32)" 2>$null
+        }
+        if (-not $v -or $v.Count -lt 2) { continue }
         if ($v[1] -ne 'True') { continue }
         if ($v[0] -in @('3.11', '3.12', '3.13')) { return $c }
     }
@@ -178,7 +195,7 @@ if (Test-Path (Join-Path $installDir '.git')) {
     if ($LASTEXITCODE -ne 0) { Die "Не удалось скачать программу с GitHub. Проверь интернет; если ошибка про доступ (403/authentication) — сообщи руководителю, нужен новый токен." }
     Ok "скачано в $installDir"
 }
-& git config --global --add safe.directory ($installDir -replace '\\', '/') 2>$null | Out-Null
+Invoke-Quiet { & git config --global --add safe.directory ($installDir -replace '\\', '/') 2>$null | Out-Null }
 
 # --- 6. Окружение Python --------------------------------------------------
 
