@@ -174,17 +174,19 @@ else {
 
 Step 5 "Скачиваю программу"
 
-& git config --global credential.helper store | Out-Null
-$credFile = Join-Path $env:USERPROFILE '.git-credentials'
-$credLine = "https://x-access-token:$ghToken@github.com"
-$existing = if (Test-Path $credFile) { Get-Content $credFile -ErrorAction SilentlyContinue } else { @() }
-$kept = $existing | Where-Object { $_ -and $_ -notmatch '@github\.com$' }
-Set-Content -Path $credFile -Value (@($kept) + $credLine | Where-Object { $_ }) -Encoding ASCII
+# Токен идёт прямо в адресе репозитория. Хранилище учётных данных не трогаем:
+# в Git for Windows на системном уровне включён Git Credential Manager, его
+# спрашивают первым, и он открыл бы сотруднику окно входа в GitHub. Заодно так
+# работает и обновление кнопкой из Telegram — без окон и без чужого аккаунта.
+$authUrl = $repoUrl -replace '^https://', "https://x-access-token:$ghToken@"
+# Ни один helper не опрашивается, а git не ждёт ввода в консоли.
+$gitAuth = @('-c', 'credential.helper=')
+$env:GIT_TERMINAL_PROMPT = '0'
 
 if (Test-Path (Join-Path $installDir '.git')) {
     Say "    папка уже существует, обновляю..."
-    & git -C $installDir remote set-url origin $repoUrl
-    & git -C $installDir fetch origin $branch
+    & git @gitAuth -C $installDir remote set-url origin $authUrl
+    & git @gitAuth -C $installDir fetch origin $branch
     if ($LASTEXITCODE -ne 0) { Die "Не удалось скачать обновление с GitHub. Проверь интернет; если ошибка про доступ — сообщи руководителю, нужен новый токен." }
     $dirty = & git -C $installDir status --porcelain
     if ($dirty) { Warn "в папке есть изменённые файлы, обновление не применял" }
@@ -196,7 +198,16 @@ if (Test-Path (Join-Path $installDir '.git')) {
     if ($parent -and -not (Test-Path $parent)) {
         New-Item -ItemType Directory -Force -Path $parent | Out-Null
     }
-    & git clone --branch $branch $repoUrl $installDir
+    # Прерванный клон оставляет пустую папку, а git отказывается клонировать
+    # в непустую. Пустую убираем молча, непустую не трогаем — это уже данные.
+    if (Test-Path $installDir) {
+        if (@(Get-ChildItem $installDir -Force -ErrorAction SilentlyContinue).Count -eq 0) {
+            Remove-Item $installDir -Force -Recurse
+        } else {
+            Die "Папка $installDir уже есть и не пуста, но это не копия программы. Покажи её содержимое руководителю — удалять сам ничего не надо."
+        }
+    }
+    & git @gitAuth clone --branch $branch $authUrl $installDir
     if ($LASTEXITCODE -ne 0) { Die "Не удалось скачать программу с GitHub. Проверь интернет; если ошибка про доступ (403/authentication) — сообщи руководителю, нужен новый токен." }
     Ok "скачано в $installDir"
 }
