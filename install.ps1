@@ -36,8 +36,20 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
     Die "Нужны права администратора. Закрой это окно, нажми правой кнопкой по «Пуск» -> «Терминал (администратор)» и вставь команду заново."
 }
 
-$ghToken = $env:BYBIT_TOKEN
+$ghToken = ($env:BYBIT_TOKEN + '').Trim()
 if (-not $ghToken) { Die "Не задан токен доступа. Скопируй команду руководителя ЦЕЛИКОМ (обе части, до и после точки с запятой)." }
+# Мессенджеры умеют портить токен: подчёркивания в нём читаются как разметка
+# курсива и пропадают. Ловим это здесь, а не глухим отказом GitHub на шаге 5.
+if ($ghToken -notmatch '^github_pat_[A-Za-z0-9_]+$' -or $ghToken.Length -lt 80) {
+    Die @"
+Токен доступа повреждён: длина $($ghToken.Length), ожидается 93.
+
+Скорее всего он потерял символы при копировании из чата — в токене есть
+подчёркивания, и мессенджеры принимают их за разметку.
+
+Скопируй команду ЦЕЛИКОМ из файла ИНСТРУКЦИЯ.txt, а не из переписки.
+"@
+}
 
 $repoUrl    = 'https://github.com/nikitarybtsov/bybit_auto_bot2.0.git'
 $branch     = if ($env:BYBIT_BRANCH) { $env:BYBIT_BRANCH } else { 'master' }
