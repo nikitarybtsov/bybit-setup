@@ -21,7 +21,9 @@ function Warn ($t) { Write-Host "    ! $t" -ForegroundColor Yellow }
 function Die  ($t) {
     Write-Host "`nОШИБКА: $t" -ForegroundColor Red
     Write-Host "`nСделай скриншот ВСЕГО этого окна и отправь руководителю." -ForegroundColor Red
-    Write-Host "Ничего не скачивай в интернете в качестве исправления.`n" -ForegroundColor Red
+    Write-Host "Ничего не скачивай в интернете в качестве исправления." -ForegroundColor Red
+    # Окно закрывается по exit, поэтому даём время снять скриншот.
+    Read-Host "`nСними скриншот, потом нажми Enter" | Out-Null
     exit 1
 }
 
@@ -285,3 +287,5 @@ Write-Host "     скриншот того, что покажет окно.`n" -
 
 Write-Host "НИКОМУ не отправляй файл id_ed25519 (без .pub) из папки $sshDir" -ForegroundColor Red
 Write-Host "Бота не запускай, пока руководитель не разрешит.`n" -ForegroundColor Red
+
+Read-Host "Нажми Enter, чтобы закрыть окно" | Out-Null
