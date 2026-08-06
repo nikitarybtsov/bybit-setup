@@ -36,27 +36,70 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
     Die "Нужны права администратора. Закрой это окно, нажми правой кнопкой по «Пуск» -> «Терминал (администратор)» и вставь команду заново."
 }
 
-$ghToken = ($env:BYBIT_TOKEN + '').Trim()
-if (-not $ghToken) { Die "Не задан токен доступа. Скопируй команду руководителя ЦЕЛИКОМ (обе части, до и после точки с запятой)." }
-# Мессенджеры умеют портить токен: подчёркивания в нём читаются как разметка
-# курсива и пропадают. Ловим это здесь, а не глухим отказом GitHub на шаге 5.
-if ($ghToken -notmatch '^github_pat_[A-Za-z0-9_]+$' -or $ghToken.Length -lt 80) {
-    Die @"
-Токен доступа повреждён: длина $($ghToken.Length), ожидается 93.
+$cfgName = 'EMPLOYEE_BOT_CONFIG_EDIT_ME.txt'
 
-Скорее всего он потерял символы при копировании из чата — в токене есть
-подчёркивания, и мессенджеры принимают их за разметку.
-
-Скопируй команду ЦЕЛИКОМ из файла ИНСТРУКЦИЯ.txt, а не из переписки.
-"@
+# Файл настроек ищем до всего остального: в нём же лежит и токен доступа,
+# поэтому сотруднику не нужно копировать его руками.
+function Find-ConfigFile ($installDir) {
+    $places = @(
+        (Join-Path $installDir $cfgName),
+        (Join-Path ([Environment]::GetFolderPath('Desktop')) $cfgName),
+        (Join-Path $env:USERPROFILE "Downloads\$cfgName"),
+        (Join-Path $env:USERPROFILE "Documents\$cfgName"),
+        (Join-Path $env:USERPROFILE "OneDrive\Desktop\$cfgName"),
+        (Join-Path $env:USERPROFILE "OneDrive\Рабочий стол\$cfgName")
+    )
+    foreach ($p in $places) { if ($p -and (Test-Path $p)) { return $p } }
+    return $null
 }
 
+function Read-ConfigValue ($path, $name) {
+    foreach ($line in (Get-Content $path -Encoding UTF8 -ErrorAction SilentlyContinue)) {
+        $t = $line.Trim()
+        if (-not $t -or $t.StartsWith('#')) { continue }
+        $i = $t.IndexOf('=')
+        if ($i -lt 1) { continue }
+        if ($t.Substring(0, $i).Trim() -eq $name) { return $t.Substring($i + 1).Trim() }
+    }
+    return $null
+}
 $repoUrl    = 'https://github.com/nikitarybtsov/bybit_auto_bot2.0.git'
 $branch     = if ($env:BYBIT_BRANCH) { $env:BYBIT_BRANCH } else { 'master' }
 $installDir = if ($env:BYBIT_DIR)    { $env:BYBIT_DIR }    else { 'C:\BybitBot' }
 
 if ($installDir -match 'OneDrive|Dropbox|Google Drive|Яндекс') {
     Die "Папка установки не должна лежать в облачной синхронизации ($installDir). Сообщи руководителю."
+}
+
+# Токен: сначала из файла настроек, потом — из переменной окружения, если её
+# задали вручную. Ручное копирование токена в команду больше не требуется.
+$configPath = Find-ConfigFile $installDir
+$ghToken = ($env:BYBIT_TOKEN + '').Trim()
+if (-not $ghToken -and $configPath) {
+    $fromConfig = Read-ConfigValue $configPath 'BYBIT_TOKEN'
+    if ($fromConfig) { $ghToken = $fromConfig.Trim() }
+}
+if (-not $ghToken) {
+    Die @"
+Не найден файл настроек $cfgName.
+
+Распакуй архив, который прислал руководитель, и положи файл
+    $cfgName
+на рабочий стол. Затем запусти команду ещё раз.
+
+Искал здесь:
+  рабочий стол, Загрузки, Документы, $installDir
+"@
+}
+# Токен из файла испортиться не может, а вот вставленный руками — легко:
+# подчёркивания в нём мессенджеры принимают за разметку курсива.
+if ($ghToken -notmatch '^github_pat_[A-Za-z0-9_]+$' -or $ghToken.Length -lt 80) {
+    Die @"
+Токен доступа повреждён: длина $($ghToken.Length), ожидается 93.
+
+Если ты вставлял токен в команду руками — не надо: он берётся из файла
+настроек. Убери из команды часть с BYBIT_TOKEN и запусти её заново.
+"@
 }
 
 Say "Папка установки : $installDir"
@@ -240,31 +283,22 @@ Ok "окружение готово"
 
 # --- 7. Персональный конфиг ----------------------------------------------
 
-Step 7 "Ищу файл настроек от руководителя"
-$cfgName = 'EMPLOYEE_BOT_CONFIG_EDIT_ME.txt'
+Step 7 "Ставлю файл настроек на место"
 $dstCfg = Join-Path $installDir $cfgName
 $configReady = $false
-if (Test-Path $dstCfg) {
-    Ok "настройки уже на месте"
+# Файл уже найден в самом начале — оттуда же был взят токен.
+if ($configPath -and (Test-Path $configPath)) {
+    if ($configPath -ne $dstCfg) { Copy-Item $configPath $dstCfg -Force }
+    Ok "настройки на месте ($configPath)"
     $configReady = $true
 } else {
-    $searchIn = @(
-        [Environment]::GetFolderPath('Desktop'),
-        (Join-Path $env:USERPROFILE 'Downloads'),
-        (Join-Path $env:USERPROFILE 'Documents')
-    )
-    $found = $null
-    foreach ($dir in $searchIn) {
-        if (-not $dir -or -not (Test-Path $dir)) { continue }
-        $hit = Get-ChildItem $dir -Filter $cfgName -File -ErrorAction SilentlyContinue | Select-Object -First 1
-        if ($hit) { $found = $hit.FullName; break }
-    }
-    if ($found) {
-        Copy-Item $found $dstCfg -Force
-        Ok "нашёл и установил: $found"
+    $again = Find-ConfigFile $installDir
+    if ($again) {
+        if ($again -ne $dstCfg) { Copy-Item $again $dstCfg -Force }
+        Ok "нашёл и установил: $again"
         $configReady = $true
     } else {
-        Warn "файла настроек пока нет — положишь его позже, см. инструкцию в конце"
+        Warn "файла настроек нет — положи его на рабочий стол и запусти команду ещё раз"
     }
 }
 
