@@ -29,6 +29,23 @@ function Die  ($t) {
 
 Say "`n=== Установка рабочего места: Bybit 2.0 Команда ===`n" 'White'
 
+# В 32-разрядном PowerShell на 64-разрядной Windows система подменяет пути:
+# System32 превращается в SysWOW64, Program Files — в Program Files (x86).
+# Из-за этого не находятся ssh.exe и Chrome, а установка компонентов Windows
+# работает через раз. Уходим в 64-разрядный интерпретатор, пока ничего не
+# натворили. SysNative виден только 32-разрядным процессам — это и есть выход.
+if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) {
+    $native = Join-Path $env:WINDIR 'SysNative\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path $native)) {
+        Die "Запущен 32-разрядный PowerShell. Закрой это окно и открой «Терминал (администратор)» или «Windows PowerShell (администратор)» — БЕЗ пометки (x86)."
+    }
+    $selfUrl = if ($env:BYBIT_INSTALLER_URL) { $env:BYBIT_INSTALLER_URL }
+               else { 'https://raw.githubusercontent.com/nikitarybtsov/bybit-setup/main/install.ps1' }
+    Warn "открыт 32-разрядный PowerShell (x86) — перезапускаю в 64-разрядном"
+    & $native -NoProfile -ExecutionPolicy Bypass -Command "irm '$selfUrl' | iex"
+    exit $LASTEXITCODE
+}
+
 # --- 0. Проверки ----------------------------------------------------------
 
 if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
@@ -196,11 +213,14 @@ else {
 # --- 3. Google Chrome -----------------------------------------------------
 
 Step 3 "Проверяю Google Chrome (в нём открывается торговый аккаунт)"
+# ProgramW6432 всегда указывает на настоящий "C:\Program Files", даже если нас
+# всё-таки запустили 32-разрядными — тогда $env:ProgramFiles врёт.
 $chromePaths = @(
     (Join-Path $env:ProgramFiles 'Google\Chrome\Application\chrome.exe'),
     (Join-Path ${env:ProgramFiles(x86)} 'Google\Chrome\Application\chrome.exe'),
+    (Join-Path $env:ProgramW6432 'Google\Chrome\Application\chrome.exe'),
     (Join-Path $env:LOCALAPPDATA 'Google\Chrome\Application\chrome.exe')
-)
+) | Where-Object { $_ }
 if ($chromePaths | Where-Object { $_ -and (Test-Path $_) }) { Ok "уже установлен" }
 else {
     Winget-Install 'Google.Chrome' 'Google Chrome'
@@ -211,7 +231,10 @@ else {
 # --- 4. OpenSSH -----------------------------------------------------------
 
 Step 4 "Проверяю OpenSSH (защищённый канал к рабочему прокси)"
-if (Have 'ssh') { Ok "уже установлен" }
+# Клиент OpenSSH входит в Windows 10 1809+ и обычно уже стоит; в PATH он может
+# отсутствовать, поэтому проверяем и штатное расположение.
+$sshBuiltin = Join-Path $env:WINDIR 'System32\OpenSSH\ssh.exe'
+if ((Have 'ssh') -or (Test-Path $sshBuiltin)) { Ok "уже установлен" }
 else {
     try {
         $cap = Get-WindowsCapability -Online -Name 'OpenSSH.Client*' -ErrorAction Stop | Select-Object -First 1
@@ -221,8 +244,18 @@ else {
         }
     } catch { Warn "не удалось поставить OpenSSH автоматически" }
     Update-PathFromRegistry
-    if (Have 'ssh') { Ok "установлен" }
+    if ((Have 'ssh') -or (Test-Path $sshBuiltin)) { Ok "установлен" }
     else { Die "OpenSSH Client не установился. Параметры Windows -> Приложения -> Дополнительные компоненты -> Добавить компонент -> OpenSSH Client, затем запусти команду заново." }
+}
+# Туннель к прокси запускает сам бот, поэтому ssh должен находиться по имени.
+if (-not (Have 'ssh') -and (Test-Path $sshBuiltin)) {
+    $sshDirPath = Split-Path $sshBuiltin -Parent
+    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    if (($userPath -split ';') -notcontains $sshDirPath) {
+        [Environment]::SetEnvironmentVariable('Path', (@($userPath, $sshDirPath) | Where-Object { $_ }) -join ';', 'User')
+        Update-PathFromRegistry
+        Ok "добавил OpenSSH в PATH"
+    }
 }
 
 # --- 5. Скачиваю бота -----------------------------------------------------
