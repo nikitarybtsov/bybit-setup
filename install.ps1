@@ -190,7 +190,12 @@ if (Test-Path (Join-Path $installDir '.git')) {
     if ($dirty) { Warn "в папке есть изменённые файлы, обновление не применял" }
     else { & git -C $installDir reset --hard "origin/$branch" | Out-Null; Ok "обновлено до последней версии" }
 } else {
-    New-Item -ItemType Directory -Force -Path (Split-Path $installDir -Parent) | Out-Null
+    # Для C:\BybitBot родителем оказывается корень диска, а New-Item на "C:\"
+    # падает с "путь имеет недопустимую форму". Создаём только то, чего нет.
+    $parent = Split-Path $installDir -Parent
+    if ($parent -and -not (Test-Path $parent)) {
+        New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    }
     & git clone --branch $branch $repoUrl $installDir
     if ($LASTEXITCODE -ne 0) { Die "Не удалось скачать программу с GitHub. Проверь интернет; если ошибка про доступ (403/authentication) — сообщи руководителю, нужен новый токен." }
     Ok "скачано в $installDir"
