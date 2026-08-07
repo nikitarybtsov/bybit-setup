@@ -438,16 +438,31 @@ $links = @(
     @{ Name = '3 Публикация меню (один раз).lnk'; Target = 'PUBLISH_EMPLOYEE_BOT_MENU.cmd';   Icon = 'shell32.dll,177' },
     @{ Name = '4 Запуск бота.lnk';                Target = 'START_EMPLOYEE_BOT.cmd';          Icon = 'shell32.dll,137' }
 )
+# WScript.Shell сохраняет ярлык через ANSI-версию системного вызова. Если
+# кодовая страница не русская (на проверенной машине ACP 1252, локаль en-US),
+# путь «C:\Users\...\OneDrive\Рабочий стол» превращается в «???????», папка не
+# находится и Save() падает с FileNotFoundException — причём и для ярлыков с
+# латинскими именами, так что дело не в них.
+#
+# Поэтому собираем ярлык по заведомо латинскому пути, а переносим на место уже
+# средствами PowerShell: они работают в Unicode и кириллицу не теряют.
+$stageDir = if ($installDir -match '^[\x20-\x7E]+$') { $installDir }
+            else { Join-Path $env:SystemRoot 'Temp' }
+$stage = Join-Path $stageDir '_shortcut_stage.lnk'
+$made = 0
 foreach ($l in $links) {
     $target = Join-Path $installDir $l.Target
     if (-not (Test-Path $target)) { Warn "не найден $($l.Target)"; continue }
-    $lnk = $shell.CreateShortcut((Join-Path $desktop $l.Name))
+    $lnk = $shell.CreateShortcut($stage)
     $lnk.TargetPath = $target
     $lnk.WorkingDirectory = $installDir
     $lnk.IconLocation = $l.Icon
     $lnk.Save()
+    Move-Item -LiteralPath $stage -Destination (Join-Path $desktop $l.Name) -Force
+    $made++
 }
-Ok "ярлыки готовы"
+if ($made -eq $links.Count) { Ok "ярлыки готовы ($made шт.)" }
+else { Warn "создано ярлыков: $made из $($links.Count)" }
 
 # --- Итог -----------------------------------------------------------------
 
