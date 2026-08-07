@@ -260,7 +260,25 @@ if (-not (Have 'ssh') -and (Test-Path $sshBuiltin)) {
 
 # --- 5. Скачиваю бота -----------------------------------------------------
 
-Step 5 "Скачиваю программу"
+# --- 5. Системные часы -----------------------------------------------------
+
+Step 5 "Сверяю системные часы"
+
+# Bybit отклоняет запрос, чья отметка времени опережает биржевую больше чем на
+# секунду: ErrCode 10002 приходит на каждый вызов, а снаружи это выглядит как
+# «бот не работает». На свежей Windows часы уходят регулярно, и заметить это
+# без подсказки почти невозможно.
+Invoke-Quiet { & sc.exe config w32time start= auto 2>$null | Out-Null }
+Invoke-Quiet { & net start w32time 2>$null | Out-Null }
+Invoke-Quiet { & w32tm /resync /force 2>$null | Out-Null }
+if ($LASTEXITCODE -eq 0) {
+    Ok "часы синхронизированы"
+} else {
+    # Не повод останавливать установку: расхождение может быть и нулевым.
+    Warn "не удалось синхронизировать часы автоматически. Открой Параметры -> Время и язык -> Дата и время и нажми «Синхронизировать»"
+}
+
+Step 6 "Скачиваю программу"
 
 # Токен идёт прямо в адресе репозитория. Хранилище учётных данных не трогаем:
 # в Git for Windows на системном уровне включён Git Credential Manager, его
@@ -301,9 +319,21 @@ if (Test-Path (Join-Path $installDir '.git')) {
 }
 Invoke-Quiet { & git config --global --add safe.directory ($installDir -replace '\\', '/') 2>$null | Out-Null }
 
+# Установщик работает с правами администратора, а бот потом запускается под
+# обычной учётной записью сотрудника. Если для UAC вводили чужой пароль
+# администратора, папка достаётся тому пользователю, и бот падает на записи
+# состояния — уже посреди живой сделки. Выдаём права тому, кто реально сидит
+# за компьютером.
+$interactive = ''
+try { $interactive = (Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).UserName } catch {}
+if (-not $interactive) { $interactive = "$env:USERDOMAIN\$env:USERNAME" }
+Invoke-Quiet { & icacls $installDir /grant "${interactive}:(OI)(CI)M" /T /C 2>$null | Out-Null }
+if ($LASTEXITCODE -eq 0) { Ok "права на папку выданы: $interactive" }
+else { Warn "не удалось выдать права на папку пользователю $interactive — если бот пожалуется на запись, покажи это руководителю" }
+
 # --- 6. Окружение Python --------------------------------------------------
 
-Step 6 "Готовлю окружение Python (самый долгий шаг, 3-10 минут)"
+Step 7 "Готовлю окружение Python (самый долгий шаг, 3-10 минут)"
 $venvPython = Join-Path $installDir '.venv\Scripts\python.exe'
 if (-not (Test-Path $venvPython)) {
     & $python -m venv (Join-Path $installDir '.venv')
@@ -316,7 +346,7 @@ Ok "окружение готово"
 
 # --- 7. Персональный конфиг ----------------------------------------------
 
-Step 7 "Ставлю файл настроек на место"
+Step 8 "Ставлю файл настроек на место"
 $dstCfg = Join-Path $installDir $cfgName
 $configReady = $false
 # Файл уже найден в самом начале — оттуда же был взят токен.
@@ -360,7 +390,7 @@ if (Test-Path $blDst) {
 
 # --- 8. SSH-ключ для прокси ----------------------------------------------
 
-Step 8 "Готовлю ключ доступа к рабочему прокси"
+Step 9 "Готовлю ключ доступа к рабочему прокси"
 $sshDir = Join-Path $env:USERPROFILE '.ssh'
 $keyPath = Join-Path $sshDir 'id_ed25519'
 New-Item -ItemType Directory -Force -Path $sshDir | Out-Null
@@ -377,7 +407,7 @@ Ok "файл для руководителя: $pubOut"
 
 # --- 9. Ярлыки ------------------------------------------------------------
 
-Step 9 "Создаю ярлыки на рабочем столе"
+Step 10 "Создаю ярлыки на рабочем столе"
 $shell = New-Object -ComObject WScript.Shell
 $links = @(
     @{ Name = '1 Проверка настроек.lnk';          Target = 'CHECK_EMPLOYEE_BOT_CONFIG.cmd';   Icon = 'shell32.dll,23' },
