@@ -335,6 +335,29 @@ if ($configPath -and (Test-Path $configPath)) {
     }
 }
 
+# Правило «не торговать со своими аккаунтами» живёт в этом файле, а не в коде.
+# В свежей копии его нет (data/ не хранится в репозитории), и без него бот
+# способен зайти в объявление собственного аккаунта. Кладём заготовку — но
+# только если файла ещё нет: он пополняется в работе, затирать его нельзя.
+$blName = 'counterparty_blacklist.json'
+$blDst = Join-Path $installDir "data\$blName"
+if (Test-Path $blDst) {
+    Ok "список своих аккаунтов уже есть, не трогаю"
+} else {
+    $blSrc = $null
+    foreach ($d in @((Split-Path $configPath -Parent), [Environment]::GetFolderPath('Desktop'),
+                     (Join-Path $env:USERPROFILE 'Downloads'), (Join-Path $env:USERPROFILE 'Documents'))) {
+        if ($d -and (Test-Path (Join-Path $d $blName))) { $blSrc = Join-Path $d $blName; break }
+    }
+    if ($blSrc) {
+        New-Item -ItemType Directory -Force -Path (Split-Path $blDst -Parent) | Out-Null
+        Copy-Item $blSrc $blDst -Force
+        Ok "список своих аккаунтов установлен"
+    } else {
+        Warn "нет $blName — бот не будет знать свои аккаунты, сообщи руководителю"
+    }
+}
+
 # --- 8. SSH-ключ для прокси ----------------------------------------------
 
 Step 8 "Готовлю ключ доступа к рабочему прокси"
