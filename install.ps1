@@ -55,19 +55,43 @@ if (-not ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdenti
 
 $cfgName = 'EMPLOYEE_BOT_CONFIG_EDIT_ME.txt'
 
+# Папки, куда файл реально попадает: рабочий стол (в том числе перенесённый
+# в OneDrive), Загрузки и Документы.
+function Search-Roots ($installDir) {
+    return @(
+        $installDir,
+        [Environment]::GetFolderPath('Desktop'),
+        (Join-Path $env:USERPROFILE 'Downloads'),
+        (Join-Path $env:USERPROFILE 'Documents'),
+        (Join-Path $env:USERPROFILE 'Desktop'),
+        (Join-Path $env:USERPROFILE 'OneDrive\Desktop'),
+        (Join-Path $env:USERPROFILE 'OneDrive\Рабочий стол'),
+        (Join-Path $env:USERPROFILE 'OneDrive\Загрузки'),
+        (Join-Path $env:USERPROFILE 'OneDrive\Документы')
+    ) | Where-Object { $_ -and (Test-Path $_) }
+}
+
+# Ищем и во вложенных папках на два уровня. Telegram Desktop сохраняет вложения
+# не в «Загрузки», а в «Загрузки\Telegram Desktop», и на этом установка встала
+# намертво: файл у сотрудника есть, а установщик говорит, что его нет. Ровно так
+# же ведёт себя распакованный архив — Проводник создаёт папку по имени архива.
+function Find-Named ($name, $installDir) {
+    foreach ($root in (Search-Roots $installDir)) {
+        $direct = Join-Path $root $name
+        if (Test-Path $direct) { return $direct }
+    }
+    foreach ($root in (Search-Roots $installDir)) {
+        $found = Get-ChildItem -LiteralPath $root -Filter $name -Recurse -Depth 2 `
+            -File -Force -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($found) { return $found.FullName }
+    }
+    return $null
+}
+
 # Файл настроек ищем до всего остального: в нём же лежит и токен доступа,
 # поэтому сотруднику не нужно копировать его руками.
 function Find-ConfigFile ($installDir) {
-    $places = @(
-        (Join-Path $installDir $cfgName),
-        (Join-Path ([Environment]::GetFolderPath('Desktop')) $cfgName),
-        (Join-Path $env:USERPROFILE "Downloads\$cfgName"),
-        (Join-Path $env:USERPROFILE "Documents\$cfgName"),
-        (Join-Path $env:USERPROFILE "OneDrive\Desktop\$cfgName"),
-        (Join-Path $env:USERPROFILE "OneDrive\Рабочий стол\$cfgName")
-    )
-    foreach ($p in $places) { if ($p -and (Test-Path $p)) { return $p } }
-    return $null
+    return Find-Named $cfgName $installDir
 }
 
 function Read-ConfigValue ($path, $name) {
@@ -104,7 +128,7 @@ if (-not $ghToken) {
     $cfgName
 на рабочий стол. Затем запусти команду ещё раз.
 
-Искал здесь:
+Искал здесь, включая вложенные папки:
   рабочий стол, Загрузки, Документы, $installDir
 "@
 }
@@ -374,11 +398,10 @@ $blDst = Join-Path $installDir "data\$blName"
 if (Test-Path $blDst) {
     Ok "список своих аккаунтов уже есть, не трогаю"
 } else {
+    # Рядом с файлом настроек — в первую очередь: их присылают одним архивом.
     $blSrc = $null
-    foreach ($d in @((Split-Path $configPath -Parent), [Environment]::GetFolderPath('Desktop'),
-                     (Join-Path $env:USERPROFILE 'Downloads'), (Join-Path $env:USERPROFILE 'Documents'))) {
-        if ($d -and (Test-Path (Join-Path $d $blName))) { $blSrc = Join-Path $d $blName; break }
-    }
+    $beside = Join-Path (Split-Path $configPath -Parent) $blName
+    if (Test-Path $beside) { $blSrc = $beside } else { $blSrc = Find-Named $blName $installDir }
     if ($blSrc) {
         New-Item -ItemType Directory -Force -Path (Split-Path $blDst -Parent) | Out-Null
         Copy-Item $blSrc $blDst -Force
